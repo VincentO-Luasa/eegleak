@@ -7,6 +7,7 @@ from .checks import (
     label_shift,
     pretraining_overlap,
     recording_overlap,
+    run_metadata_checks,
     subject_overlap,
     window_temporal_overlap,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "label_shift",
     "pretraining_overlap",
     "recording_overlap",
+    "run_metadata_checks",
     "subject_overlap",
     "window_temporal_overlap",
     "__version__",

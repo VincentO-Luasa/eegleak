@@ -6,6 +6,10 @@ run (missing column, single split, ...) returns a ``warning`` explaining why.
 
 from __future__ import annotations
 
+import hashlib
+import itertools
+
+import numpy as np
 import pandas as pd
 
 from .report import Finding
@@ -74,3 +78,130 @@ def subject_overlap(df: pd.DataFrame, subject_col: str = "subject_id", split_col
 def recording_overlap(df: pd.DataFrame, recording_col: str = "recording_id", split_col: str = "split") -> Finding:
     """Error if any recording appears in more than one split."""
     return _id_overlap(df, recording_col, split_col, "recording_overlap", "recording")
+
+
+def window_temporal_overlap(
+    df: pd.DataFrame,
+    recording_col: str = "recording_id",
+    start_col: str = "start_s",
+    end_col: str = "end_s",
+    split_col: str = "split",
+    gap_s: float = 0.0,
+) -> Finding:
+    """Error if windows from different splits overlap in time within a recording.
+
+    Warning if they are closer than ``gap_s`` seconds (adjacent windows are autocorrelated).
+    For each window, the sweep finds the latest end among earlier-starting windows of every
+    other split in the same recording: O(n log n) for the sort plus O(n * n_splits).
+    """
+    check = "window_temporal_overlap"
+    if f := _missing(df, check, recording_col, start_col, end_col, split_col):
+        return f
+    cols = [recording_col, start_col, end_col, split_col]
+    nan = df[cols].isna().any(axis=1)
+    d = df.loc[~nan, cols].set_axis(["rec", "start", "end", "split"], axis=1).astype({"rec": str, "split": str})
+    shared = d.groupby("rec")["split"].nunique().loc[lambda n: n > 1].index
+    d = d[d["rec"].isin(shared)].sort_values(["rec", "start"], kind="stable")
+    gap = pd.Series(np.inf, index=d.index)
+    for split in d["split"].unique():
+        other = d["split"] != split
+        latest_end = d["end"].where(~other, -np.inf).groupby(d["rec"]).cummax()
+        gap = gap.where(~other, np.minimum(gap, d["start"] - latest_end))
+    details = {"n_recordings_in_several_splits": len(shared), "n_rows_missing": int(nan.sum()), "gap_s": gap_s}
+    for severity, hit, what in [
+        ("error", gap < 0, "overlap in time"),
+        ("warning", gap < gap_s, f"are < {gap_s} s apart"),
+    ]:
+        if hit.any():
+            recs = d.loc[hit, "rec"].value_counts().sort_index()
+            examples = d[hit].assign(gap_s=gap[hit]).head(10).to_dict("records")
+            return Finding(
+                check,
+                severity,
+                f"{hit.sum()} window(s) in {len(recs)} recording(s) {what} with a window from another split: "
+                f"{_preview(recs.index.tolist())}.",
+                {**details, "windows_per_recording": recs.to_dict(), "examples": examples},
+            )
+    if nan.any():
+        return Finding(
+            check,
+            "warning",
+            f"No cross-split window overlap found, but {nan.sum()} row(s) had missing values.",
+            details,
+        )
+    return Finding(
+        check,
+        "info",
+        f"No windows from different splits overlap or lie within {gap_s} s "
+        f"({len(shared)} recording(s) appear in more than one split).",
+        details,
+    )
+
+
+def duplicate_windows(arrays: dict[str, np.ndarray], decimals: int = 6) -> Finding:
+    """Error if identical windows (after rounding to ``decimals``) occur in more than one split.
+
+    ``arrays`` maps a split name to an array of shape ``(n_windows, ...)``. Duplicates within a
+    single split are not reported. Values within ``10**-decimals`` of each other can still round
+    differently when they straddle a rounding boundary.
+    """
+    check = "duplicate_windows"
+    if len(arrays) < 2:
+        return Finding(check, "warning", f"Only {len(arrays)} split given {list(arrays)}; nothing to compare.")
+    seen: dict[bytes, dict[str, list[int]]] = {}
+    for split, arr in arrays.items():
+        arr = np.asarray(arr, dtype=np.float64)
+        rounded = np.round(arr.reshape(len(arr), -1), decimals) + 0.0  # + 0.0 maps -0.0 to 0.0
+        for i, row in enumerate(rounded):
+            key = hashlib.blake2b(str(arr.shape[1:]).encode() + row.tobytes(), digest_size=16).digest()
+            seen.setdefault(key, {}).setdefault(split, []).append(i)
+    groups = [g for g in seen.values() if len(g) > 1]
+    details = {"n_windows": {s: len(a) for s, a in arrays.items()}, "decimals": decimals}
+    if groups:
+        pairs = pd.Series(["/".join(sorted(g)) for g in groups]).value_counts().to_dict()
+        return Finding(
+            check,
+            "error",
+            f"{len(groups)} distinct window(s) occur in more than one split ({pairs}).",
+            {**details, "n_duplicate_groups": len(groups), "split_pairs": pairs, "examples": groups[:10]},
+        )
+    return Finding(
+        check,
+        "info",
+        f"No window occurs in more than one split ({sum(details['n_windows'].values())} checked).",
+        details,
+    )
+
+
+def label_shift(
+    df: pd.DataFrame, label_col: str = "label", split_col: str = "split", tv_threshold: float = 0.1
+) -> Finding:
+    """Warning if the class distribution of any two splits differs by total variation > ``tv_threshold``."""
+    check = "label_shift"
+    if f := _missing(df, check, label_col, split_col):
+        return f
+    nan = df[label_col].isna() | df[split_col].isna()
+    dist = pd.crosstab(df.loc[~nan, split_col].astype(str), df.loc[~nan, label_col].astype(str), normalize="index")
+    tv = {
+        f"{a}/{b}": round(0.5 * float((dist.loc[a] - dist.loc[b]).abs().sum()), 4)
+        for a, b in itertools.combinations(dist.index, 2)
+    }
+    details = {"distributions": dist.round(4).to_dict("index"), "tv_distance": tv, "n_rows_missing": int(nan.sum())}
+    if not tv:
+        return Finding(check, "warning", f"Only {len(dist)} split present; nothing to compare.", details)
+    worst = max(tv, key=tv.get)
+    if tv[worst] > tv_threshold:
+        return Finding(
+            check,
+            "warning",
+            f"Class distributions differ between splits: total variation {tv[worst]} for {worst} "
+            f"(threshold {tv_threshold}).",
+            details,
+        )
+    return Finding(
+        check,
+        "info",
+        f"Class distributions are similar across splits (max total variation {tv[worst]} for {worst}, "
+        f"threshold {tv_threshold}).",
+        details,
+    )

@@ -2,6 +2,8 @@
 
 from .checks import (
     duplicate_windows,
+    group_vs_random_gap,
+    label_permutation_test,
     label_shift,
     pretraining_overlap,
     recording_overlap,
@@ -16,6 +18,8 @@ __all__ = [
     "Finding",
     "Report",
     "duplicate_windows",
+    "group_vs_random_gap",
+    "label_permutation_test",
     "label_shift",
     "pretraining_overlap",
     "recording_overlap",

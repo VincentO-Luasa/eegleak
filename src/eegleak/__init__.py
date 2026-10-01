@@ -3,6 +3,7 @@
 from .checks import (
     duplicate_windows,
     label_shift,
+    pretraining_overlap,
     recording_overlap,
     subject_overlap,
     window_temporal_overlap,
@@ -16,6 +17,7 @@ __all__ = [
     "Report",
     "duplicate_windows",
     "label_shift",
+    "pretraining_overlap",
     "recording_overlap",
     "subject_overlap",
     "window_temporal_overlap",

@@ -12,6 +12,7 @@ import itertools
 import numpy as np
 import pandas as pd
 
+from . import registry
 from .report import Finding
 
 PREVIEW = 5  # number of offending items quoted in a message
@@ -204,4 +205,39 @@ def label_shift(
         f"Class distributions are similar across splits (max total variation {tv[worst]} for {worst}, "
         f"threshold {tv_threshold}).",
         details,
+    )
+
+
+def pretraining_overlap(eval_datasets: str | list[str], model: str) -> Finding:
+    """Warning when an evaluation dataset is, or may overlap with, the model's pretraining corpus.
+
+    "May overlap" means both datasets are drawn from the same parent corpus (e.g. TUAB and TUSZ
+    are both subsets of the TUH EEG corpus). Only models in :mod:`eegleak.registry` are checked.
+    """
+    check = "pretraining_overlap"
+    names = [eval_datasets] if isinstance(eval_datasets, str) else list(eval_datasets)
+    key = registry.find_model(model)
+    if key is None:
+        return Finding(
+            check,
+            "info",
+            f"No registry entry for {model!r}; pretraining overlap not checked.",
+            {"known_models": sorted(registry.MODELS)},
+        )
+    entry = registry.MODELS[key]
+    hits = {}
+    for name in names:
+        ds = registry.canonical_dataset(name)
+        for seen in entry["pretraining"]:
+            if registry.normalize(ds) == registry.normalize(seen):
+                hits[name] = f"{name} is in the pretraining corpus"
+            elif shared := registry.lineage(ds) & registry.lineage(seen):
+                hits.setdefault(name, f"{name} may overlap {seen} (both part of {', '.join(sorted(shared))})")
+    details = {"model": key, "pretraining": entry["pretraining"], "source": entry["source"], "overlaps": hits}
+    if hits:
+        return Finding(
+            check, "warning", f"Possible pretraining overlap for {key}: {'; '.join(hits.values())}.", details
+        )
+    return Finding(
+        check, "info", f"None of {names} is in the registered pretraining corpus of {key} (see source).", details
     )

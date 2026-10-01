@@ -40,5 +40,5 @@ eegleak check examples/clean_splits.csv        # exit 0
 See `docs/QUESTIONS.md`.
 
 ### Next steps
-- Confirm CI is green on GitHub, then push the `v0.1.0` tag (already created locally and pushed).
+- Confirm CI is green on the GitHub Actions tab for `main` and the `v0.1.0` tag.
 - Optionally register more models (EEGMamba, REVE) after reading their papers.

@@ -15,12 +15,12 @@ def test_alias_hit_is_case_and_punctuation_insensitive():
 
 def test_subset_of_pretraining_corpus():
     f = pretraining_overlap("TUH Abnormal", "CBraMod")
-    assert f.severity == "warning" and "may overlap TUEG" in f.message
+    assert f.severity == "warning" and "is a subset of TUEG" in f.message
 
 
 def test_sibling_subsets_may_overlap():
     f = pretraining_overlap("TUAB", "LaBraM")
-    assert f.severity == "warning" and "part of TUEG" in f.message
+    assert f.severity == "warning" and "both subsets of TUEG" in f.message
 
 
 def test_no_overlap():

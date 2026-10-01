@@ -234,8 +234,12 @@ def pretraining_overlap(eval_datasets: str | list[str], model: str) -> Finding:
         for seen in entry["pretraining"]:
             if registry.normalize(ds) == registry.normalize(seen):
                 hits[name] = f"{name} is in the pretraining corpus"
+            elif seen in registry.lineage(ds):
+                hits.setdefault(name, f"{name} is a subset of {seen}, which is in the pretraining corpus")
             elif shared := registry.lineage(ds) & registry.lineage(seen):
-                hits.setdefault(name, f"{name} may overlap {seen} (both part of {', '.join(sorted(shared))})")
+                hits.setdefault(
+                    name, f"{name} may share patients or recordings with {seen} (both subsets of {', '.join(shared)})"
+                )
     details = {"model": key, "pretraining": entry["pretraining"], "source": entry["source"], "overlaps": hits}
     if hits:
         return Finding(

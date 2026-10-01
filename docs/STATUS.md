@@ -1,0 +1,44 @@
+# Status
+
+## 2026-10-01: v0.1.0
+
+### Done
+- **Core types.** `Finding` and `Report` match Appendix A.
+- **Checks.** All nine functions in brief section 5 are implemented in `src/eegleak/checks.py` and exported from `eegleak`.
+- **Registry.** `src/eegleak/registry.py` covers BIOT (three checkpoints), CBraMod, LaBraM and EEGPT. Every entry has a source, verified against the papers; see `docs/NOTES.md`.
+- **CLI.** `eegleak check` supports configurable columns, `--gap-s` and `--format markdown|json`. It exits 1 on errors and 2 on a missing required column.
+- **Examples.** `examples/make_examples.py` generates `clean_splits.csv` (exits 0) and `leaky_splits.csv` (exits 1, with 3 errors and 1 warning).
+- **README.** Every output shown was produced by a fresh Python 3.10 venv (`pip install .`). A script compared each README code block's output with the output shown and found them identical.
+- **CI.** GitHub Actions runs ruff check, ruff format, and pytest with coverage (fail under 90%) on Python 3.10, 3.11 and 3.12.
+
+### Commands run
+```bash
+uv venv -p 3.12 .venv && uv pip install -p .venv -e ".[dev]"
+ruff check . && ruff format --check .
+pytest --cov=eegleak --cov-fail-under=90       # also run locally in fresh 3.10 / 3.11 / 3.12 venvs
+python examples/make_examples.py
+eegleak check examples/leaky_splits.csv        # exit 1
+eegleak check examples/clean_splits.csv        # exit 0
+```
+
+### Test results
+- 39 tests pass on Python 3.10, 3.11 and 3.12.
+- Coverage: `checks.py` 99%, total 99%.
+- On macOS with numpy 2.2 (Python 3.10), scikit-learn's LogisticRegression emits harmless `RuntimeWarning: overflow encountered in matmul` warnings. This is a known numpy/Accelerate issue; the tests are unaffected.
+- The GitHub Actions run could not be checked from this machine: `gh` is not installed and the repo is private. Check the Actions tab.
+
+### Known limitations
+- `eegleak` does not detect:
+  - leakage through shared preprocessing statistics;
+  - label information inside features;
+  - one person recorded under different IDs;
+  - pretraining overlap for models or datasets missing from the registry.
+- Rounding in `duplicate_windows` can split two values that lie within the tolerance but straddle a rounding boundary.
+- The significance test in `label_permutation_test` is a normal approximation over the permutation scores.
+
+### Open questions
+See `docs/QUESTIONS.md`.
+
+### Next steps
+- Confirm CI is green on GitHub, then push the `v0.1.0` tag (already created locally and pushed).
+- Optionally register more models (EEGMamba, REVE) after reading their papers.

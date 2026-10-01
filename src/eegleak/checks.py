@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import balanced_accuracy_score
+from sklearn.model_selection import GroupKFold, StratifiedKFold, cross_val_predict
 
 from . import registry
 from .report import Finding
@@ -241,3 +244,108 @@ def pretraining_overlap(eval_datasets: str | list[str], model: str) -> Finding:
     return Finding(
         check, "info", f"None of {names} is in the registered pretraining corpus of {key} (see source).", details
     )
+
+
+def _cv_setup(X, y, groups, n_splits: int, check: str):
+    """Flatten ``X`` and choose a fold count usable by both stratified and group K-fold.
+
+    Returns ``(X, y, groups, k, n_classes)`` or a warning ``Finding`` when the data cannot be split.
+    """
+    X = np.asarray(X)
+    X, y, groups = X.reshape(len(X), -1), np.asarray(y), np.asarray(groups)
+    if not len(X) == len(y) == len(groups):
+        raise ValueError(f"X, y and groups must have the same length, got {len(X)}, {len(y)}, {len(groups)}")
+    if pd.isna(groups).any() or pd.isna(y).any():
+        return Finding(check, "warning", "Cannot run: y or groups contain missing values.")
+    _, class_counts = np.unique(y, return_counts=True)
+    k = min(n_splits, len(np.unique(groups)), class_counts.min())
+    if len(class_counts) < 2 or k < 2:
+        return Finding(
+            check,
+            "warning",
+            f"Cannot run: need at least 2 classes, 2 groups and 2 samples per class "
+            f"(got {len(class_counts)} classes, {len(np.unique(groups))} groups, smallest class {class_counts.min()}).",
+        )
+    return X, y, groups, int(k), len(class_counts)
+
+
+def _cv_score(estimator, X, y, cv, groups=None) -> float:
+    """Balanced accuracy of pooled out-of-fold predictions (defined even if a fold lacks a class)."""
+    return float(balanced_accuracy_score(y, cross_val_predict(estimator, X, y, groups=groups, cv=cv)))
+
+
+def group_vs_random_gap(X, y, groups, estimator, n_splits: int = 5, seed: int = 0, threshold: float = 0.05) -> Finding:
+    """Compare random stratified K-fold with group K-fold for the same estimator.
+
+    ``X`` has shape ``(n_windows, ...)`` and is flattened; ``y`` and ``groups`` have shape
+    ``(n_windows,)``. A large positive gap shows how much a split that ignores ``groups`` (e.g.
+    subjects) would inflate the score. Warning if the gap exceeds ``threshold``.
+    """
+    check = "group_vs_random_gap"
+    setup = _cv_setup(X, y, groups, n_splits, check)
+    if isinstance(setup, Finding):
+        return setup
+    X, y, groups, k, _ = setup
+    random = _cv_score(estimator, X, y, StratifiedKFold(k, shuffle=True, random_state=seed))
+    group = _cv_score(estimator, X, y, GroupKFold(k), groups)
+    gap = random - group
+    details = {"random_score": random, "group_score": group, "gap": gap, "n_splits": k, "threshold": threshold}
+    scores = f"random K-fold {random:.3f} vs group K-fold {group:.3f} (balanced accuracy, {k} folds)"
+    if gap > threshold:
+        return Finding(check, "warning", f"A random split inflates the score by {gap:.3f}: {scores}.", details)
+    return Finding(check, "info", f"Random and group splits agree within {threshold}: {scores}.", details)
+
+
+def label_permutation_test(
+    X, y, groups, estimator, n_permutations: int = 20, seed: int = 0, alpha: float = 0.05
+) -> Finding:
+    """Negative control: permute labels within each group and evaluate with group K-fold.
+
+    With a sound pipeline the permuted-label balanced accuracy is at chance (``1 / n_classes``).
+    Error if its mean is above chance by a one-sided z-test at level ``alpha`` (suggests a bug or
+    leakage, e.g. one subject spread over several groups). Also reports the null distribution and
+    the empirical p-value of the real score, ``(1 + #(null >= real)) / (1 + n_permutations)``; its
+    smallest possible value is ``1 / (1 + n_permutations)``, so choose ``n_permutations`` accordingly.
+    """
+    check = "label_permutation_test"
+    if n_permutations < 2:
+        raise ValueError("n_permutations must be at least 2")
+    setup = _cv_setup(X, y, groups, 5, check)
+    if isinstance(setup, Finding):
+        return setup
+    X, y, groups, k, n_classes = setup
+    members = [np.flatnonzero(groups == g) for g in np.unique(groups)]
+    if all(len(np.unique(y[idx])) == 1 for idx in members):
+        return Finding(
+            check, "warning", "Cannot run: labels are constant within every group, so permuting them changes nothing."
+        )
+    rng = np.random.default_rng(seed)
+    cv = GroupKFold(k)
+    real = _cv_score(estimator, X, y, cv, groups)
+    null = []
+    for _ in range(n_permutations):
+        y_perm = y.copy()
+        for idx in members:
+            y_perm[idx] = y[rng.permutation(idx)]
+        null.append(_cv_score(estimator, X, y_perm, cv, groups))
+    null = np.array(null)
+    chance = 1 / n_classes
+    sem = null.std(ddof=1) / np.sqrt(n_permutations)
+    z = (null.mean() - chance) / sem if sem > 0 else np.inf * np.sign(null.mean() - chance)
+    p_value = (1 + int((null >= real).sum())) / (1 + n_permutations)
+    details = {
+        "real_score": real,
+        "null_scores": null.tolist(),
+        "null_mean": float(null.mean()),
+        "chance": chance,
+        "z": float(z),
+        "p_value": p_value,
+        "n_splits": k,
+    }
+    summary = (
+        f"permuted-label score {null.mean():.3f} ± {null.std(ddof=1):.3f} vs chance {chance:.3f}; "
+        f"real score {real:.3f}, p = {p_value:.3f} ({n_permutations} permutations)"
+    )
+    if z > NormalDist().inv_cdf(1 - alpha):
+        return Finding(check, "error", f"Above chance with permuted labels, suggesting leakage: {summary}.", details)
+    return Finding(check, "info", f"Permuted labels give chance performance: {summary}.", details)

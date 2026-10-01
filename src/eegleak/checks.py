@@ -16,7 +16,7 @@ from sklearn.metrics import balanced_accuracy_score
 from sklearn.model_selection import GroupKFold, StratifiedKFold, cross_val_predict
 
 from . import registry
-from .report import Finding
+from .report import Finding, Report
 
 PREVIEW = 5  # number of offending items quoted in a message
 
@@ -136,7 +136,7 @@ def window_temporal_overlap(
     return Finding(
         check,
         "info",
-        f"No windows from different splits overlap or lie within {gap_s} s "
+        f"No windows from different splits overlap{f' or lie within {gap_s} s' if gap_s else ''} "
         f"({len(shared)} recording(s) appear in more than one split).",
         details,
     )
@@ -349,3 +349,34 @@ def label_permutation_test(
     if z > NormalDist().inv_cdf(1 - alpha):
         return Finding(check, "error", f"Above chance with permuted labels, suggesting leakage: {summary}.", details)
     return Finding(check, "info", f"Permuted labels give chance performance: {summary}.", details)
+
+
+def run_metadata_checks(
+    df: pd.DataFrame,
+    subject_col: str = "subject_id",
+    recording_col: str = "recording_id",
+    split_col: str = "split",
+    start_col: str = "start_s",
+    end_col: str = "end_s",
+    label_col: str = "label",
+    gap_s: float = 0.0,
+    tv_threshold: float = 0.1,
+) -> Report:
+    """Run the subject, recording, temporal (if time columns exist) and label (if labels exist) checks.
+
+    Raises ``ValueError`` if a required column (subject, recording, split) is missing.
+    """
+    if missing := [c for c in (subject_col, recording_col, split_col) if c not in df.columns]:
+        raise ValueError(f"missing required column(s) {missing}; available: {list(df.columns)}")
+    report = Report()
+    report.add(subject_overlap(df, subject_col, split_col))
+    report.add(recording_overlap(df, recording_col, split_col))
+    if {start_col, end_col} <= set(df.columns):
+        report.add(window_temporal_overlap(df, recording_col, start_col, end_col, split_col, gap_s))
+    else:
+        report.add(Finding("window_temporal_overlap", "info", f"Skipped: no {start_col!r}/{end_col!r} columns."))
+    if label_col in df.columns:
+        report.add(label_shift(df, label_col, split_col, tv_threshold))
+    else:
+        report.add(Finding("label_shift", "info", f"Skipped: no {label_col!r} column."))
+    return report

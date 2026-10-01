@@ -4,6 +4,7 @@
 
 - **IDs are compared as strings**, so `1` and `"1"` count as the same subject. Rows with a missing ID or split are skipped and reported as a `warning` (they could hide a leak).
 - **A check that cannot run returns a `warning`.** This covers a missing column, fewer than two splits, or a degenerate permutation. Inside `run_metadata_checks`, an optional check whose columns are absent is reported as an `info` "skipped" finding.
+- **`run_metadata_checks` raises `ValueError` if a required column is missing.** The required columns are subject, recording and split. A missing one means the input is malformed, not that the check passed; the CLI turns this into a usage error with exit code 2.
 - **Touching windows are not an overlap.** In `window_temporal_overlap`, a window ending at `t` and one starting at `t` do not overlap. They are flagged only when `gap_s > 0`.
 - **`duplicate_windows` hashing:**
   - windows are cast to float64, rounded, and `-0.0` is mapped to `0.0`;

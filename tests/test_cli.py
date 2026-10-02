@@ -30,7 +30,7 @@ def test_cli_exit_codes_and_markdown(capsys):
     assert capsys.readouterr().out.startswith("**Result: PASS**")
     assert main(["check", str(EXAMPLES / "leaky_splits.csv")]) == 1
     out = capsys.readouterr().out
-    assert "**Result: FAIL** (3 errors, 1 warnings)" in out and "S05-N1" in out
+    assert "**Result: FAIL** (3 errors, 1 warnings)" in out and "S05-night1" in out
 
 
 def test_cli_json_and_options(tmp_path, capsys):

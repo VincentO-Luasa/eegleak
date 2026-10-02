@@ -32,7 +32,7 @@ def clean(rng):
     splits = ["train"] * 8 + ["val"] * 2 + ["test"] * 2
     return pd.concat(
         [
-            windows(rng, f"S{i:02d}", f"S{i:02d}-N{night}", split)
+            windows(rng, f"S{i:02d}", f"S{i:02d}-night{night}", split)
             for i, split in enumerate(splits, 1)
             for night in (1, 2)
         ]
@@ -42,14 +42,16 @@ def clean(rng):
 def leaky(rng):
     df = clean(rng)
     # 1. Subject S03's second night was put in the test set.
-    df.loc[df["recording_id"] == "S03-N2", "split"] = "test"
+    df.loc[df["recording_id"] == "S03-night2", "split"] = "test"
     # 2. Recording S05-N1 was cut at 600 s into train/test, with 50%-overlapping windows.
-    df = df[df["recording_id"] != "S05-N1"]
-    cut = windows(rng, "S05", "S05-N1", "train", n=79, stride=15.0)
+    df = df[df["recording_id"] != "S05-night1"]
+    cut = windows(rng, "S05", "S05-night1", "train", n=79, stride=15.0)
     cut.loc[cut["start_s"] >= 600, "split"] = "test"
     # 3. The test subjects S11 and S12 are mostly awake.
     awake = [
-        windows(rng, s, f"{s}-N{night}", "test", counts=[14, 2, 2, 1, 1]) for s in ("S11", "S12") for night in (1, 2)
+        windows(rng, s, f"{s}-night{night}", "test", counts=[14, 2, 2, 1, 1])
+        for s in ("S11", "S12")
+        for night in (1, 2)
     ]
     return pd.concat([df[~df["subject_id"].isin(["S11", "S12"])], cut, *awake])
 

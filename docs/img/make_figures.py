@@ -81,7 +81,7 @@ def windows():
     pts = " ".join(f"{x0 + a * scale:.1f},{88 - 11 * b:.1f}" for a, b in zip(t, signal, strict=True))
     labels = ["W", "W", "N1", "N2", "N2", "N2"]
     body = [
-        text(x0, 30, "One recording (subject S01, night S01-N1), cut into 30-second windows", "h"),
+        text(x0, 30, "One recording (S01-night1: subject S01, first night), cut into 30-second windows", "h"),
         f'<polyline class="trace" points="{pts}"/>',
     ]
     for k, label in enumerate(labels):
@@ -89,15 +89,18 @@ def windows():
         body += [tick(x), text(x + 60, 140, f"window {k}", "muted", "middle"), text(x + 60, 158, label, "", "middle")]
     body += [
         tick(x0 + 720),
-        text(x0, 190, "Illustrative signal and labels. eegleak only needs this table, one row per window:", "muted"),
+        text(
+            x0, 182, "Illustrative signal. Labels are sleep stages: W awake, N1–N3 light to deep sleep, REM.", "muted"
+        ),
+        text(x0, 198, "eegleak only needs this table, one row per window:", "muted"),
     ]
     cols = ["subject_id", "recording_id", "split", "start_s", "end_s", "label"]
-    rows = [["S01", "S01-N1", "train", f"{30.0 * k}", f"{30.0 * (k + 1)}", lab] for k, lab in enumerate(labels[:3])]
+    rows = [["S01", "S01-night1", "train", f"{30.0 * k}", f"{30.0 * (k + 1)}", lab] for k, lab in enumerate(labels[:3])]
     for r, row in enumerate([cols, *rows, ["…"] * 6]):
-        y = 220 + 22 * r
+        y = 228 + 22 * r
         body += [text(x0 + 125 * c, y, v, "h" if r == 0 else "") for c, v in enumerate(row)]
-    body.append(f'<line class="rule" x1="{x0}" y1="227" x2="{x0 + 740}" y2="227"/>')
-    svg("windows.svg", 820, 340, body)
+    body.append(f'<line class="rule" x1="{x0}" y1="235" x2="{x0 + 740}" y2="235"/>')
+    svg("windows.svg", 820, 348, body)
 
 
 def example_splits(csv="examples/leaky_splits.csv"):
@@ -123,13 +126,13 @@ def example_splits(csv="examples/leaky_splits.csv"):
         y = top + row_h * recs.index(rec) + 11
         return [text(x0 + width + 16, y + 15 * k, line, "hlt" if k == 0 else "muted") for k, line in enumerate(lines)]
 
-    y = top + row_h * recs.index("S05-N1") - 2
+    y = top + row_h * recs.index("S05-night1") - 2
     x, w = x0 + 590 * scale, 35 * scale  # the 600-615 s overlap, padded to stay visible
     body += [
         f'<rect class="hl" x="{x:.1f}" y="{y}" width="{w:.1f}" height="{row_h}" rx="3"/>',
-        *note("S03-N1", ["1. Subject S03: night 1 in train,", "night 2 in test"]),
-        *note("S05-N1", ["2. Recording cut at 600 s; its", "windows overlap across the cut"]),
-        *note("S11-N1", ["3. Test subjects mostly awake", "(label shift)"]),
+        *note("S03-night1", ["1. Subject S03: night 1 in train,", "night 2 in test"]),
+        *note("S05-night1", ["2. Recording cut at 600 s; its", "windows overlap across the cut"]),
+        *note("S11-night1", ["3. Test subjects mostly awake", "(label shift)"]),
     ]
     svg("example_splits.svg", 880, y_axis + 30, body)
 

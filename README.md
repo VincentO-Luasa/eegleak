@@ -30,7 +30,7 @@
   - identical windows in two splits;
   - a large difference in class balance between splits;
   - an evaluation dataset that a pretrained model has already seen. This is looked up in a [registry](src/eegleak/registry.py) in which every entry cites its source.
-- **Negative controls** run your own scikit-learn model:
+- **Negative controls** run your own scikit-learn model ([how to apply them](#negative-controls-on-your-own-pipeline)):
   - The first compares a random split with a person-wise split. The difference shows how much leakage would inflate the score.
   - The second shuffles the labels within each person. A sound pipeline must then score at chance; if it does better, something is leaking.
 
@@ -127,9 +127,53 @@ False
 
 `report.to_markdown()` and `report.to_dict()` give the table above and a JSON-ready dict.
 
-### Negative controls on a model
+To check whether an evaluation dataset was in a pretrained model's training data:
 
-`X` has shape `(n_windows, ...)` (flattened internally); `y` and `groups` (e.g. subject IDs) have shape `(n_windows,)`. Any scikit-learn estimator works.
+```python
+import eegleak
+
+print(eegleak.pretraining_overlap(["TUAB", "Sleep-EDF"], "CBraMod").message)
+```
+
+```
+Possible pretraining overlap for CBraMod: TUAB is a subset of TUEG, which is in the pretraining corpus.
+```
+
+### Negative controls on your own pipeline
+
+A **negative control** is an experiment whose correct answer you already know. If your pipeline gets it wrong, the pipeline is leaking, even if each split check passed.
+
+| Control | What it does | Sound pipeline | Red flag |
+|---|---|---|---|
+| `group_vs_random_gap` | Scores your model twice: once with a random K-fold split, once with a person-wise K-fold split | Both scores are similar | The random score is much higher (`warning`): a random split would inflate your number by that gap |
+| `label_permutation_test` | Shuffles the labels within each person, so they carry no information, then re-scores person-wise | The score drops to chance (`1 / n_classes`) | The score stays above chance (`error`): the model is getting information from somewhere other than the labels |
+
+**To apply them to your pipeline:**
+
+1. **Build `X`, `y` and `groups`,** with one entry per window in the same order:
+   - `X`, of shape `(n_windows, ...)`, holds your features or raw windows;
+   - `y` holds the labels;
+   - `groups` holds the **subject** IDs. Do not use recording IDs: one person's several recordings would then count as different people.
+2. **Wrap the whole pipeline in one scikit-learn estimator.** Anything that learns from data, such as normalisation or feature selection, must be inside it, so that it is refit on each training fold. Deep-learning models work too through a scikit-learn wrapper such as braindecode's `EEGClassifier`.
+3. **Run both controls:**
+
+```python
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+import eegleak
+
+pipeline = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))  # your pipeline here
+
+report = eegleak.Report()
+report.add(eegleak.group_vs_random_gap(X, y, groups, pipeline, seed=0))
+report.add(eegleak.label_permutation_test(X, y, groups, pipeline, n_permutations=99, seed=0))
+print(report.to_markdown())
+```
+
+The permutation test refits the pipeline `n_folds × (1 + n_permutations)` times, so start with a fast configuration. Its p-value cannot go below `1 / (1 + n_permutations)`: 99 permutations are enough to report p < 0.01.
+
+**Example on synthetic data.** Ten people each have a distinctive EEG "fingerprint". First, the label is a per-person trait, so only identity predicts it. Then the labels are pure noise:
 
 ```python
 import numpy as np
@@ -148,16 +192,14 @@ print(eegleak.group_vs_random_gap(X, y, groups, est).message)
 # Window-level labels that carry no signal: permuted labels must stay at chance.
 y = rng.integers(0, 2, size=200)
 print(eegleak.label_permutation_test(X, y, groups, est, n_permutations=50).message)
-print(eegleak.pretraining_overlap(["TUAB", "Sleep-EDF"], "CBraMod").message)
 ```
 
 ```
 A random split inflates the score by 0.500: random K-fold 1.000 vs group K-fold 0.500 (balanced accuracy, 5 folds).
 Permuted labels give chance performance: permuted-label score 0.490 ± 0.026 vs chance 0.500; real score 0.479, p = 0.647 (50 permutations).
-Possible pretraining overlap for CBraMod: TUAB is a subset of TUEG, which is in the pretraining corpus.
 ```
 
-The p-value is `(1 + #null >= real) / (1 + n_permutations)`, so its resolution is `1 / (1 + n_permutations)`: use at least 99 permutations to be able to report p < 0.01.
+In the first case, a random split would have reported 100% balanced accuracy for a model that is at chance on new people.
 
 ## Checks
 

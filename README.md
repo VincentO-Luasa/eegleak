@@ -6,17 +6,21 @@
 
 ## The problem
 
-**EEG** (electroencephalography) records the brain's electrical activity with electrodes placed on the scalp. Each electrode produces a voltage trace, sampled hundreds of times per second. Recordings are long: an overnight sleep study lasts about eight hours.
+**How an EEG model is evaluated, step by step:**
 
-**Machine learning on EEG** usually cuts each recording into short **windows** and trains a model to predict a label for each one. The label might be the sleep stage, whether a seizure is happening, or a mental state. Sleep is scored in 30-second windows, so one night gives about 960 of them. A dataset therefore has many thousands of windows but often only a few dozen people.
+1. **Record.** EEG measures the brain's electrical activity with electrodes on the scalp. One night of sleep is about 8 hours of signal.
+2. **Cut into windows.** Each recording is split into short windows, for example 30 s, which gives about 960 per night. Each window gets a label such as a sleep stage or "seizure / no seizure".
+3. **Split.** The windows are divided into a **training set** the model learns from and a **test set** it never sees.
+4. **Score.** Performance on the test set is meant to predict how the model will do on a **new patient**.
 
-To measure how good a model is, the windows are divided into a **training set** the model learns from and a **test set** it has never seen. This division is the **split**. The test score is meant to predict how the model will do on a new patient.
+**Where it goes wrong:**
 
-**The trap: the model can learn the person instead of the task.** Every person's EEG has a recognisable signature, shaped by their anatomy, the electrode placement and their individual brain rhythms. Windows that are close in time from the same night look very similar. If windows are split at random, every person ends up in both sets. The model can then score well by recognising whose EEG it is looking at, without learning anything that transfers to a new person. It is like grading students on exam questions copied from their homework.
+- **Each person's EEG is recognisable,** like a fingerprint, and windows from the same night look alike.
+- **A random split puts every person in both sets,** so the model can score well by recognising *who* it is looking at, not by learning the task.
+- **The score looks excellent but does not hold up on new people.** It is like grading an exam made of homework questions.
+- **The same thing happens with pretrained models,** whose pretraining data may already contain the benchmark's test set.
 
 ![Window-level vs person-level split](docs/img/leakage.svg)
-
-Papers that report scores from leaky splits look excellent, but those scores do not hold up on new people. **A second, newer form of the same problem** affects pretrained "foundation" models. These are trained on large public EEG collections, and a benchmark test set may already be part of the data a model was pretrained on.
 
 ## What eegleak does
 

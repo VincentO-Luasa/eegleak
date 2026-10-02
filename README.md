@@ -2,19 +2,75 @@
 
 [![CI](https://github.com/VincentO-Luasa/eegleak/actions/workflows/ci.yml/badge.svg)](https://github.com/VincentO-Luasa/eegleak/actions/workflows/ci.yml)
 
-Catch data leakage in EEG train/validation/test splits, and run negative controls, before you trust a benchmark number.
+**Check that an EEG machine-learning score is real before you publish it.** `eegleak` finds the most common ways test data leaks into training, and runs control experiments that expose a score that is too good to be true.
 
-## Why this exists
+## The problem
 
-EEG datasets contain long recordings from a small number of people. If windows from the same person end up in both the training set and the test set, a model can learn to recognise the person instead of the thing you care about (a sleep stage, a seizure, a mental state). The test score then looks excellent, but the model fails on a new person. A second problem affects pretrained "foundation" models: the evaluation data can overlap with the data the model was pretrained on, which inflates results in the same way.
+**EEG** (electroencephalography) records the brain's electrical activity with electrodes placed on the scalp. Each electrode produces a voltage trace, sampled hundreds of times per second. Recordings are long: an overnight sleep study lasts about eight hours.
 
-`eegleak` makes these problems easy to detect:
+**Machine learning on EEG** usually cuts each recording into short **windows** and trains a model to predict a label for each one. The label might be the sleep stage, whether a seizure is happening, or a mental state. Sleep is scored in 30-second windows, so one night gives about 960 of them. A dataset therefore has many thousands of windows but often only a few dozen people.
 
-- it checks split metadata for subject, recording and time-window overlap,
-- it flags duplicate windows and large shifts in class balance between splits,
-- it warns when an evaluation dataset overlaps a known pretraining corpus,
-- it measures how much a leaky split would have inflated your score,
-- it runs a label-permutation control that should stay at chance if your pipeline is sound.
+To measure how good a model is, the windows are divided into a **training set** the model learns from and a **test set** it has never seen. This division is the **split**. The test score is meant to predict how the model will do on a new patient.
+
+**The trap: the model can learn the person instead of the task.** Every person's EEG has a recognisable signature, shaped by their anatomy, the electrode placement and their individual brain rhythms. Windows that are close in time from the same night look very similar. If windows are split at random, every person ends up in both sets. The model can then score well by recognising whose EEG it is looking at, without learning anything that transfers to a new person. It is like grading students on exam questions copied from their homework.
+
+![Window-level vs person-level split](docs/img/leakage.svg)
+
+Papers that report scores from leaky splits look excellent, but those scores do not hold up on new people. **A second, newer form of the same problem** affects pretrained "foundation" models. These are trained on large public EEG collections, and a benchmark test set may already be part of the data a model was pretrained on.
+
+## What eegleak does
+
+- **Split checks** read only the table describing your split, so no model is needed. They flag:
+  - a person or recording that appears in more than one split;
+  - test windows that overlap in time with training windows;
+  - identical windows in two splits;
+  - a large difference in class balance between splits;
+  - an evaluation dataset that a pretrained model has already seen. This is looked up in a [registry](src/eegleak/registry.py) in which every entry cites its source.
+- **Negative controls** run your own scikit-learn model:
+  - The first compares a random split with a person-wise split. The difference shows how much leakage would inflate the score.
+  - The second shuffles the labels within each person. A sound pipeline must then score at chance; if it does better, something is leaking.
+
+Every check returns a finding with a severity (`error`, `warning` or `info`) and a plain-language message. A check that passes says what it checked. A check that cannot run says why, never passing silently.
+
+## The data
+
+### Input format
+
+`eegleak` never reads raw EEG files. It reads a table (a pandas DataFrame or a CSV) with **one row per window**, describing where each window came from and which split it is in:
+
+![From a recording to the splits table](docs/img/windows.svg)
+
+| column | required | meaning |
+|---|---|---|
+| `subject_id` | yes | the person |
+| `recording_id` | yes | one recording, night or session of that person |
+| `split` | yes | `train`, `val` or `test` (any names work) |
+| `start_s`, `end_s` | no | window start and end, in seconds from the start of its recording |
+| `label` | no | class label of the window |
+
+Column names are configurable. The model-based checks also take arrays aligned with these rows:
+- `X`, the windows themselves, of shape `(n_windows, ...)`;
+- `y`, the labels;
+- `groups`, usually the subject IDs.
+
+### Example dataset
+
+The two files in [`examples/`](examples/) are **synthetic**. They were generated by [`examples/make_examples.py`](examples/make_examples.py) and contain no real recordings, no EEG signals and no personal data. They mimic the metadata of an overnight sleep study:
+
+- 12 simulated subjects (`S01`–`S12`), each recorded on two nights (`S01-N1`, `S01-N2`, ...);
+- each night is shortened to 40 windows of 30 s (20 minutes) to keep the files small;
+- each window is labelled with one of the five standard sleep stages: `W` (awake), `N1`, `N2` (light sleep), `N3` (deep sleep) and `REM` (rapid-eye-movement sleep, when most dreaming happens);
+- the stage proportions are the same in every night.
+
+**`clean_splits.csv`** splits by person: 8 subjects for training, 2 for validation and 2 for test. **`leaky_splits.csv`** starts from the same data and plants three common mistakes:
+
+![The planted problems in leaky_splits.csv](docs/img/example_splits.svg)
+
+1. **Subject S03's second night is in the test set**, while the first night is in training.
+2. **Recording S05-N1 is cut in half at 600 s**, with the first half in training and the second in test. It uses 50%-overlapping windows (one every 15 s), so the windows on either side of the cut share 15 seconds of signal.
+3. **Test subjects S11 and S12 are mostly awake**, so the class balance of the test set differs from training.
+
+The figures are generated from these files by [`docs/img/make_figures.py`](docs/img/make_figures.py).
 
 ## Install
 
@@ -29,12 +85,7 @@ Requires Python 3.10+, numpy, pandas and scikit-learn.
 
 ### Command line
 
-Your splits file has one row per window (`start_s`, `end_s` and `label` are optional):
-
-```csv
-window_id,subject_id,recording_id,split,start_s,end_s,label
-0,S01,S01-N1,train,0.0,30.0,N2
-```
+Run the split checks on the leaky example. All three planted problems are reported:
 
 ```bash
 eegleak check examples/leaky_splits.csv
@@ -52,8 +103,6 @@ eegleak check examples/leaky_splits.csv
 ```
 
 The command exits with status 1 if any error is found (0 for `examples/clean_splits.csv`), so it can run in CI. Use `--format json` for the full details, `--gap-s 30` to also warn about windows from different splits that are less than 30 s apart, and `--subject-col` etc. for other column names. See `eegleak check --help`.
-
-`examples/leaky_splits.csv` is generated by [`examples/make_examples.py`](examples/make_examples.py) and contains three planted problems: subject S03 has one night in train and one in test; recording S05-N1 was cut into train and test with 50%-overlapping windows; the test subjects are mostly awake.
 
 ### Python
 
@@ -108,7 +157,7 @@ The p-value is `(1 + #null >= real) / (1 + n_permutations)`, so its resolution i
 
 ## Checks
 
-Every check returns a `Finding(check, severity, message, details)`. A passing check returns an `info` finding saying what was checked. A check that cannot run (missing column, single split, ...) returns a `warning` saying why, never a silent pass. A `Report` is `ok` when it has no errors.
+Each check returns a `Finding(check, severity, message, details)`. A `Report` is `ok` when it contains no errors; warnings do not fail it.
 
 | Check | Severity | What it catches |
 |---|---|---|
